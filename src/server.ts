@@ -3,7 +3,7 @@ import app from "./app";
 import logger from "./utils/logger";
 import client from "prom-client";
 
-const PORT = 3008;
+const PORT = 3000;
 
 app.listen(PORT, () => {
   logger.info(`Server running on port ${PORT}`);

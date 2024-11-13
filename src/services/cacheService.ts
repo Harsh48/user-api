@@ -5,50 +5,55 @@ import { monitorCacheHit, monitorCacheMiss } from "../utils/metrics";
 import { User } from "../models/userModel";
 
 class CacheService {
-  private cache = new LRUCache<number, User>({ max: CACHE_MAX_ITEMS, ttl: CACHE_TTL });
+  // Store both the user data and a timestamp
+  private cache = new LRUCache<number, { data: User; timestamp: number }>({ max: CACHE_MAX_ITEMS });
   private hitCount = 0;
   private missCount = 0;
   private totalResponseTime = 0;
   private requestCount = 0;
 
-  // Get method with internal response time tracking and hit/miss logging
+  constructor() {
+    // Start background task to remove stale entries
+    this.startPruneTask();
+  }
+
+  // Get method with hit/miss tracking and response time logging
   get(key: number): User | undefined {
-    // Start timing the cache access
     const start = Date.now();
-    
-    // Attempt to retrieve the user from the cache
-    const result = this.cache.get(key);
-    
-    // Calculate response time and add it to the total response time
+    const entry = this.cache.get(key);
     const responseTime = Date.now() - start;
+
     this.totalResponseTime += responseTime;
     this.requestCount++;
 
-    // Track hit or miss
-    if (result) {
+    // Check if the entry is still valid
+    if (entry && Date.now() - entry.timestamp < CACHE_TTL) {
       this.hitCount++;
       monitorCacheHit.inc();
-    } else {
-      this.missCount++;
-      monitorCacheMiss.inc();
+      return entry.data;
+    } else if (entry) {
+      // If the entry is expired, delete it
+      this.cache.delete(key);
     }
 
-    return result;
+    this.missCount++;
+    monitorCacheMiss.inc();
+    return undefined;
   }
 
-  // Set method to add items to the cache
+  // Set method to add items to the cache with timestamp
   set(key: number, value: User) {
-    this.cache.set(key, value);
+    this.cache.set(key, { data: value, timestamp: Date.now() });
   }
 
-  // Method to get cache statistics including average response time
+  // Method to get cache statistics
   get stats() {
     const averageResponseTime = this.requestCount > 0 ? this.totalResponseTime / this.requestCount : 0;
     return {
       size: this.cache.size,
       hits: this.hitCount,
       misses: this.missCount,
-      averageResponseTime: averageResponseTime.toFixed(2) + " ms"
+      averageResponseTime: averageResponseTime.toFixed(2) + " ms",
     };
   }
 
@@ -59,6 +64,18 @@ class CacheService {
     this.missCount = 0;
     this.totalResponseTime = 0;
     this.requestCount = 0;
+  }
+
+  // Background task to manually clear stale entries
+  private startPruneTask() {
+    setInterval(() => {
+      const now = Date.now();
+      for (const [key, entry] of this.cache.entries()) {
+        if (now - entry.timestamp >= CACHE_TTL) {
+          this.cache.delete(key);
+        }
+      }
+    }, 10000); // Runs every 10 seconds
   }
 }
 
